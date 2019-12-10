@@ -291,7 +291,15 @@ def getAllFunctionsVars(lines, classArray, friendArray):
 
 # Main Part    
 try: # 连接数据库
-    dbcon = mysql.connector.connect(user='root',password='new-password',host='localhost',database='C++/Cdata')  
+    #Read Database Config Info
+    fp = open("database.conf", 'r')
+    db_username = fp.readline().split("username=")[1].strip('\n')
+    db_password = fp.readline().split("password=")[1].strip('\n')
+    db_host     = fp.readline().split("host=")[1].strip('\n')
+    db_name     = fp.readline().split("database=")[1].strip('\n')
+    fp.close()
+
+    dbcon = mysql.connector.connect(user=db_username,password=db_password,host=db_host,database=db_name)  
     cur = dbcon.cursor() 
 
     cur.execute("SELECT FileID, FileName FROM FileTable")
