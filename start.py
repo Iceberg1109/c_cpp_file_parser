@@ -3,6 +3,7 @@ import mysql.connector
 import re
 import json
 import sys
+import argparse
 
 # This function cleans the comment "//", spaces at the beginning and at the end of the line
 # Parameter line represent the each line of the c/cpp file
@@ -291,127 +292,133 @@ def getAllFunctionsVars(lines, classArray, friendArray):
 
 # Main Part    
 try: # 连接数据库
-    #Read Database Config Info
-    fp = open("database.conf", 'r')
-    db_username = fp.readline().split("username=")[1].strip('\n')
-    db_password = fp.readline().split("password=")[1].strip('\n')
-    db_host     = fp.readline().split("host=")[1].strip('\n')
-    db_name     = fp.readline().split("database=")[1].strip('\n')
-    fp.close()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-f', type=str, help='file to parse')
+    parser.add_argument('username', type=str, help='database username')
+    parser.add_argument('password', type=str, help='database password')
+    parser.add_argument('db_host', type=str, help='database host')
+    parser.add_argument('db_name', type=str, help='database name')
 
+    args = parser.parse_args()
+    print(args)
+    #Read Database Config Info
+    db_username = args.username
+    db_password = args.password
+    db_host     = args.db_host
+    db_name     = args.db_name
+    
     dbcon = mysql.connector.connect(user=db_username,password=db_password,host=db_host,database=db_name)  
     cur = dbcon.cursor() 
 
     cur.execute("SELECT FileID, FileName FROM FileTable")
     files = cur.fetchall()
 
-    for f_idx in range(len(files)):
-        classArray    = []
-        functionArray = [] 
-        variableArray = []
-        friendArray = []
-        try:
+    classArray    = []
+    functionArray = [] 
+    variableArray = []
+    friendArray = []
+    try:
 
-        # ************************************* find class : 得到类****************************************
+    # ************************************* find class : 得到类****************************************
+        
+        #open file and seach every line : 打开文件并搜索每一行
+        with open(args.f, 'rb') as fp:
+            lines = fp.readlines()
             
-            #open file and seach every line : 打开文件并搜索每一行
-            with open(files[f_idx][1], 'rb') as fp:
-                lines = fp.readlines()
-                
-                # Get all classes and add their names to variable types
-                temp = getAllClasses(lines)
-                classArray = temp['class']
-                friendArray = temp['friend']
+            # Get all classes and add their names to variable types
+            temp = getAllClasses(lines)
+            classArray = temp['class']
+            friendArray = temp['friend']
 
-                # Search functions and variables with variable types
-                # variableTypes contains the default types and Class Names
-                func_vars = getAllFunctionsVars(lines, classArray, friendArray)
-                functionArray    = func_vars['func']
-                variableArray    = func_vars['var']
-                
-                # Determine the parent of function
-                for idx, eachFunc in enumerate(functionArray):
-                    for eachClass in classArray:
-                        if eachFunc['stLine'] >= eachClass['stLine'] and eachFunc['stLine'] <= eachClass['endLine'] and eachFunc['parent'] == "none":
-                            functionArray[idx]['parent']     = 'class'
-                            functionArray[idx]['parentName'] = eachClass['name']
-                # Save in the database 
-                funcNo = 1
-                funcClassNo = 1
-                
+            # Search functions and variables with variable types
+            # variableTypes contains the default types and Class Names
+            func_vars = getAllFunctionsVars(lines, classArray, friendArray)
+            functionArray    = func_vars['func']
+            variableArray    = func_vars['var']
+            
+            # Determine the parent of function
+            for idx, eachFunc in enumerate(functionArray):
+                for eachClass in classArray:
+                    if eachFunc['stLine'] >= eachClass['stLine'] and eachFunc['stLine'] <= eachClass['endLine'] and eachFunc['parent'] == "none":
+                        functionArray[idx]['parent']     = 'class'
+                        functionArray[idx]['parentName'] = eachClass['name']
+            # Save in the database 
+            funcNo = 1
+            funcClassNo = 1
+            
+            for eachFunc in functionArray:
+                if eachFunc['parent'] == 'class':
+                    sql_value = [args.f, eachFunc['parentName'], eachFunc['name'], funcClassNo, eachFunc['type'], eachFunc['markedArea'], eachFunc['body']]
+                    val = (tuple(sql_value))
+                    sql = "INSERT INTO `FuncClassTable` (`FileID`, `ClassName`, `FuncName`, `FuncNo`, `ReturnType`, `MarkedArea`, `FuncBody`) VALUES (%s, %s, %s, %s, %s, %s, %s)" # INSERT INTO FuncClassTable
+                    cur.execute(sql, val)
+                    funcClassNo = funcClassNo + 1
+                else:  
+                    sql_value = [args.f, eachFunc['name'], funcNo, eachFunc['type'], eachFunc['body']]
+                    val = (tuple(sql_value))
+                    sql = "INSERT INTO `FuncInfoTable` (`FileID`, `FuncName`, `FuncNo`, `ReturnType`, `FuncBody`) VALUES (%s, %s, %s, %s, %s)" # INSERT INTO FuncInfoTable
+                    cur.execute(sql, val)
+                    funcNo = funcNo + 1
+                dbcon.commit()
+
+            # Determine parent of Variable
+            for idx, each in enumerate(variableArray):
+                # Check if variable belongs to function
                 for eachFunc in functionArray:
-                    if eachFunc['parent'] == 'class':
-                        sql_value = [files[f_idx][0], eachFunc['parentName'], eachFunc['name'], funcClassNo, eachFunc['type'], eachFunc['markedArea'], eachFunc['body']]
-                        val = (tuple(sql_value))
-                        sql = "INSERT INTO `FuncClassTable` (`FileID`, `ClassName`, `FuncName`, `FuncNo`, `ReturnType`, `MarkedArea`, `FuncBody`) VALUES (%s, %s, %s, %s, %s, %s, %s)" # INSERT INTO FuncClassTable
-                        cur.execute(sql, val)
-                        funcClassNo = funcClassNo + 1
-                    else:  
-                        sql_value = [files[f_idx][0], eachFunc['name'], funcNo, eachFunc['type'], eachFunc['body']]
-                        val = (tuple(sql_value))
-                        sql = "INSERT INTO `FuncInfoTable` (`FileID`, `FuncName`, `FuncNo`, `ReturnType`, `FuncBody`) VALUES (%s, %s, %s, %s, %s)" # INSERT INTO FuncInfoTable
-                        cur.execute(sql, val)
-                        funcNo = funcNo + 1
-                    dbcon.commit()
+                    if each['stLine'] >= eachFunc['stLine'] and each['stLine'] <= eachFunc['endLine']:
+                        # if variable belong to a function, then check if the func belongs to a class or not
+                        if eachFunc['parent'] == "none":
+                            variableArray[idx]['parent']     = 'func'
+                            variableArray[idx]['parentName'] = eachFunc['name']
+                        else:
+                            variableArray[idx]['parent']     = 'class-func'
+                            variableArray[idx]['parentName'] = eachFunc['name'] + "&" + eachFunc['parentName']
+                # Check if variable belongs to function unless it's belong to a function
+                for eachClass in classArray:
+                    if each['stLine'] >= eachClass['stLine'] and each['stLine'] <= eachClass['endLine'] and each['parent'] == 'none':
+                        variableArray[idx]['parent']     = 'class'
+                        variableArray[idx]['parentName'] = eachClass['name']
+            # Save Varialbes to Database
+            classVariableNo     = 1
+            funcVariableNo      = 1
+            funcClassVariableNo = 1
+            VariableNo          = 1
 
-                # Determine parent of Variable
-                for idx, each in enumerate(variableArray):
-                    # Check if variable belongs to function
-                    for eachFunc in functionArray:
-                        if each['stLine'] >= eachFunc['stLine'] and each['stLine'] <= eachFunc['endLine']:
-                            # if variable belong to a function, then check if the func belongs to a class or not
-                            if eachFunc['parent'] == "none":
-                                variableArray[idx]['parent']     = 'func'
-                                variableArray[idx]['parentName'] = eachFunc['name']
-                            else:
-                                variableArray[idx]['parent']     = 'class-func'
-                                variableArray[idx]['parentName'] = eachFunc['name'] + "&" + eachFunc['parentName']
-                    # Check if variable belongs to function unless it's belong to a function
-                    for eachClass in classArray:
-                        if each['stLine'] >= eachClass['stLine'] and each['stLine'] <= eachClass['endLine'] and each['parent'] == 'none':
-                            variableArray[idx]['parent']     = 'class'
-                            variableArray[idx]['parentName'] = eachClass['name']
-                # Save Varialbes to Database
-                classVariableNo     = 1
-                funcVariableNo      = 1
-                funcClassVariableNo = 1
-                VariableNo          = 1
+            for each in variableArray:
+                if each['parent'] == 'class':
+                    valArray = [args.f, classVariableNo, each['parentName'], each['name'], each['type'], each['markedArea']]
+                    val = (tuple(valArray))
+                    sql = "INSERT INTO `ClassVariable` (`FileID`, `VariableNo`, `ClassName`, `VariableName`, `VariableType`, `MarkedArea`) VALUES (%s, %s, %s, %s, %s, %s)" # INSERT INTO ClassVariable
+                    cur.execute(sql, val)
+                    classVariableNo = classVariableNo + 1
+                elif each['parent'] ==  'func':
+                    valArray = [args.f, funcVariableNo, each['type'], each['name'],  each['parentName'], each['isInput']]
+                    val = (tuple(valArray))
+                    sql = "INSERT INTO `FuncVariable` (`FileID`, `VariableNo`, `VariableType`, `VariableName`, `FuncName`, `IsInput`) VALUES (%s, %s, %s, %s, %s, %s)" # INSERT INTO FuncVariable
+                    cur.execute(sql, val)
+                    funcVariableNo = funcVariableNo + 1
+                elif each['parent'] ==  'class-func':
+                    funcName = each['parentName'].split('&')[0]
+                    className = each['parentName'].split('&')[1]
+                    valArray = [args.f, funcClassVariableNo, className, funcName, each['name'], each['type'], each['markedArea'], each['isInput']]
+                    val = (tuple(valArray))
+                    sql = "INSERT INTO `FuncClassVariable` (`FileID`, `VariableNo`, `ClassName`, `FuncName`, `VariableName`, `VariableType`, `MarkedArea`, `IsInput`) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)" # INSERT INTO FuncClassVariable
+                    cur.execute(sql, val)
+                    funcClassVariableNo = funcClassVariableNo + 1
+                else:
+                    valArray = [args.f, VariableNo, each['type'], each['name'], each['isConst']]
+                    val = (tuple(valArray))
+                    sql = "INSERT INTO `VariableTable` (`FileID`, `VariableNo`, `VariableType`, `VariableName`, `IsConst`) VALUES (%s, %s, %s, %s, %s)" # INSERT INTO VariableTable
+                    cur.execute(sql, val)
+                    VariableNo = VariableNo + 1    
+                dbcon.commit()
+        
+    #****************************************End****************************************************
 
-                for each in variableArray:
-                    if each['parent'] == 'class':
-                        valArray = [files[f_idx][0], classVariableNo, each['parentName'], each['name'], each['type'], each['markedArea']]
-                        val = (tuple(valArray))
-                        sql = "INSERT INTO `ClassVariable` (`FileID`, `VariableNo`, `ClassName`, `VariableName`, `VariableType`, `MarkedArea`) VALUES (%s, %s, %s, %s, %s, %s)" # INSERT INTO ClassVariable
-                        cur.execute(sql, val)
-                        classVariableNo = classVariableNo + 1
-                    elif each['parent'] ==  'func':
-                        valArray = [files[f_idx][0], funcVariableNo, each['type'], each['name'],  each['parentName'], each['isInput']]
-                        val = (tuple(valArray))
-                        sql = "INSERT INTO `FuncVariable` (`FileID`, `VariableNo`, `VariableType`, `VariableName`, `FuncName`, `IsInput`) VALUES (%s, %s, %s, %s, %s, %s)" # INSERT INTO FuncVariable
-                        cur.execute(sql, val)
-                        funcVariableNo = funcVariableNo + 1
-                    elif each['parent'] ==  'class-func':
-                        funcName = each['parentName'].split('&')[0]
-                        className = each['parentName'].split('&')[1]
-                        valArray = [files[f_idx][0], funcClassVariableNo, className, funcName, each['name'], each['type'], each['markedArea'], each['isInput']]
-                        val = (tuple(valArray))
-                        sql = "INSERT INTO `FuncClassVariable` (`FileID`, `VariableNo`, `ClassName`, `FuncName`, `VariableName`, `VariableType`, `MarkedArea`, `IsInput`) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)" # INSERT INTO FuncClassVariable
-                        cur.execute(sql, val)
-                        funcClassVariableNo = funcClassVariableNo + 1
-                    else:
-                        valArray = [files[f_idx][0], VariableNo, each['type'], each['name'], each['isConst']]
-                        val = (tuple(valArray))
-                        sql = "INSERT INTO `VariableTable` (`FileID`, `VariableNo`, `VariableType`, `VariableName`, `IsConst`) VALUES (%s, %s, %s, %s, %s)" # INSERT INTO VariableTable
-                        cur.execute(sql, val)
-                        VariableNo = VariableNo + 1    
-                    dbcon.commit()
-            
-        #****************************************End****************************************************
-
-        except IOError:
-            print("File not found or path is incorrect")
-        finally:
-            fp.close()
+    except IOError:
+        print("File not found or path is incorrect")
+    finally:
+        fp.close()
 
     print("Done")
     dbcon.close()
@@ -420,7 +427,3 @@ except Exception as e:
     exc_type, exc_obj, exc_tb = sys.exc_info()
     print(exc_type, exc_tb.tb_lineno)
     print(str(e))
-
-
-
-
